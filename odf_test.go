@@ -89,13 +89,13 @@ func TestUserFileAddsReplacesAndDisables(t *testing.T) {
 	if cfg.RelocateTo != "/elsewhere" {
 		t.Errorf("relocate_to %q", cfg.RelocateTo)
 	}
-	if c, err := cfg.Find("mine"); err != nil || c.Source != env.UserFile {
+	if c, err := cfg.Resolve("mine"); err != nil || c.Source != env.UserFile {
 		t.Errorf("mine: %v %+v", err, c)
 	}
-	if c, _ := cfg.Find("downloads"); c.Notes != "mine now" {
+	if c, _ := cfg.Resolve("downloads"); c.Notes != "mine now" {
 		t.Errorf("downloads not replaced: %+v", c)
 	}
-	if _, err := cfg.Find("trash"); err == nil {
+	if _, err := cfg.Resolve("trash"); err == nil {
 		t.Error("trash is disabled but listed")
 	}
 }
@@ -112,17 +112,17 @@ func TestProbeSizesGlobsAndAbsent(t *testing.T) {
 	env := fixture(t)
 	cfg, _ := Load(env)
 	env.ProjectRoots = cfg.ProjectRoots
-	turbo, _ := cfg.Find("turbo-cache")
+	turbo, _ := cfg.Resolve("turbo-cache")
 	r := Probe(context.Background(), env, turbo)
 	if !r.Present || r.Files != 2 || r.Bytes < 32<<10 {
 		t.Fatalf("turbo: %+v", r)
 	}
-	npm, _ := cfg.Find("npm-cache")
+	npm, _ := cfg.Resolve("npm-cache")
 	r = Probe(context.Background(), env, npm)
 	if r.Bytes < 100<<10 || r.Files != 3 {
 		t.Fatalf("npm: bytes %d files %d", r.Bytes, r.Files)
 	}
-	bun, _ := cfg.Find("bun-cache")
+	bun, _ := cfg.Resolve("bun-cache")
 	if r := Probe(context.Background(), env, bun); r.Present || r.Found[0].State != "absent" {
 		t.Fatalf("bun: %+v", r)
 	}
@@ -139,7 +139,7 @@ func TestProbeShowsSymlinkAsRelocated(t *testing.T) {
 	}
 	cfg, _ := Load(env)
 	env.ProjectRoots = cfg.ProjectRoots
-	c, _ := cfg.Find("go-build-cache")
+	c, _ := cfg.Resolve("go-build-cache")
 	r := Probe(context.Background(), env, c)
 	if r.Present || r.Found[0].State != "symlink" || r.Found[0].Target != target {
 		t.Fatalf("%+v", r.Found)
@@ -450,7 +450,7 @@ func TestExternalVolumeSkippedByDefault(t *testing.T) {
 	ext := external(t, env)
 	cfg, _ := Load(env)
 	env.ProjectRoots = cfg.ProjectRoots
-	turbo, _ := cfg.Find("turbo-cache")
+	turbo, _ := cfg.Resolve("turbo-cache")
 	r := Probe(context.Background(), env, turbo)
 	var states []string
 	for _, f := range r.Found {
@@ -477,7 +477,7 @@ func TestExternalOptIn(t *testing.T) {
 	external(t, env)
 	cfg, _ := Load(env)
 	env.ProjectRoots = cfg.ProjectRoots
-	turbo, _ := cfg.Find("turbo-cache")
+	turbo, _ := cfg.Resolve("turbo-cache")
 	turbo.External = true
 	if r := Probe(context.Background(), env, turbo); r.Bytes < 512<<10 {
 		t.Fatalf("row opt-in: bytes %d", r.Bytes)
@@ -530,7 +530,7 @@ func TestProjectRootsExpandPlaceholder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c, err := a.Cfg.Find(name)
+		c, err := a.Cfg.Resolve(name)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -24,9 +24,13 @@ var defaultCulprits []byte
 
 // Culprit is one row.
 type Culprit struct {
-	Name     string `json:"name"`
-	Title    string `json:"title,omitempty"`
-	Category string `json:"category,omitempty"`
+	Name string `json:"name"`
+	// Aliases are more words that name the row (brew for homebrew-cache);
+	// a name or alias resolves exactly, a prefix of one when it is unique
+	// (resolve.go).
+	Aliases  []string `json:"aliases,omitempty"`
+	Title    string   `json:"title,omitempty"`
+	Category string   `json:"category,omitempty"`
 	// Paths are ~-relative or absolute; a * matches within one path
 	// segment (filepath.Glob). A path holding {project_root} stands for
 	// one path per entry of the file's project_roots (none when the list
@@ -176,6 +180,11 @@ func validate(cfg Config) error {
 		case len(c.Paths) == 0 && len(c.Size) == 0:
 			return fmt.Errorf("culprit %q has no paths", c.Name)
 		}
+		for _, alias := range c.Aliases {
+			if alias == "" || strings.ContainsAny(alias, "/ ") {
+				return fmt.Errorf("culprit %q: alias %q is not one word without / or spaces", c.Name, alias)
+			}
+		}
 		for _, cmd := range c.Clear {
 			if len(cmd) == 0 {
 				return fmt.Errorf("culprit %q: an empty clear command", c.Name)
@@ -184,16 +193,6 @@ func validate(cfg Config) error {
 		seen[c.Name] = true
 	}
 	return nil
-}
-
-// Find is the culprit named name.
-func (cfg Config) Find(name string) (Culprit, error) {
-	for _, c := range cfg.Culprits {
-		if c.Name == name {
-			return c, nil
-		}
-	}
-	return Culprit{}, fmt.Errorf("no culprit %q (o-df culprit list names them)", name)
 }
 
 // Templates are a culprit path with {project_root} filled in once per

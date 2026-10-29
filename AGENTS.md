@@ -11,6 +11,7 @@ Plans and todos are kept outside this repository; do not add a TODO.md or docs/p
 | Concern | File |
 |---|---|
 | The culprit row, the embedded defaults, the user file merge, path expansion | `culprits.go`, `culprits.json` |
+| Resolving a culprit word (exact, alias, unique prefix, oden's descendant rule, did-you-mean) | `resolve.go` |
 | The parallel walk (allocated bytes, one volume, hard links once), disk totals | `walk.go`, `stat_*.go` |
 | Probing a culprit, sizes and ages as text | `probe.go` |
 | clear and relocate (copy, verify, delete, link), the home guard | `actions.go` |

@@ -65,11 +65,21 @@ o-df top ~/Downloads --depth 1 --min 500M
 
 ## culprit verbs
 
-`culprit` is a noun with five verbs, the same on the command line, in the
+`culprit` is a noun with six verbs, the same on the command line, in the
 TUI and from a host (`o-df catalog`). Every one prints JSON
 (`--format table|markdown` for the list).
 
+A NAME may be abbreviated, as oden matches command words: an exact name or
+alias wins, else a unique prefix (`o-df free npm` is npm-cache, `o-df
+culprit show go-b` is go-build-cache, `o-df free brew` is homebrew-cache by
+its alias). A prefix of several fails listing them (`"go" is ambiguous:
+go-build-cache, go-mod-cache`), an unknown name lists the closest, and
+clear, free, delete and relocate never act on either; an abbreviated name's
+confirm names the full culprit.
+
 - `list`: rows `{noun, id: culprit/NAME, label, data: report, cells}`.
+- `names [--query WORD]`: the names WORD may mean, `[{id, label}]` (every
+  name for no word): the palette's choices for NAME.
 - `show NAME`: the row and every path it expands to, sized.
 - `size NAME`: `{name, bytes, human, files, last_used}`.
 - `clear NAME`: only for a rebuildable culprit, after a confirm (`--yes`
@@ -177,6 +187,7 @@ A culprit row's fields:
 | Field | Meaning |
 |---|---|
 | `name` | one word, the id (`culprit/NAME`) |
+| `aliases` | more words that name the row (`brew` for homebrew-cache) |
 | `title`, `category`, `notes` | shown in the detail |
 | `paths` | `~`, `$HOME`, `*` (one path segment, `filepath.Glob`) and `{project_root}` (each of `project_roots`); a missing path is absent |
 | `rebuildable` | the owning tool recreates the data; only these can be cleared |

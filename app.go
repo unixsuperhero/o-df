@@ -108,12 +108,16 @@ func (a *App) registerVerbs() {
 	r := a.r
 	r.Define("culprit").
 		Verb("list", a.culpritList, "every culprit with its size, biggest first: rows {noun, id: culprit/NAME, label, data: report, cells}; --all includes the absent ones").Rows("culprit").Fetch().Quiet().
+		Verb("names", a.culpritNames, "the culprit names a word may mean, for completion: every name for no query, else the one it resolves to (exact, alias or unique prefix) or the ones an ambiguous prefix shares: [{id: NAME, label: title}]").Fetch().Quiet().
 		Verb("show", a.culpritShow, "one culprit's row (paths, rebuildable, clear commands, advice) and every path it expands to, sized").Fetch().Quiet().Positional("name").
 		Verb("size", a.culpritSize, "one culprit's size: {name, bytes, human, files, last_used}").Fetch().Quiet().Positional("name").
 		Verb("clear", a.culpritClear, "empty rebuildable culprits (their clear commands, else their paths' contents): NAME gives {name, before, after, freed}; --names or --all (every present rebuildable culprit, never one that is not rebuildable) ask once, listing each with its size and the total, and give {cleared, skipped, freed}").Confirm("Clear {{label}}? Its tool rebuilds it on demand.").Positional("name").Alias("free", "delete").
 		Verb("relocate", a.culpritRelocate, "copy a culprit's paths to TO/<path under home>, verify, delete the source; --link leaves a symlink: {name, dir, moved, freed}").Confirm("Relocate {{label}} (copy, verify, delete)?").Positional("name")
 	setHistory(r, ochazuke.HistoryChange, "culprit.clear", "culprit.relocate")
-	name := ochazuke.Parameter{Type: "string", Description: "a culprit name (o-df culprit list; default: the focused row's)"}
+	// A name may be abbreviated (a unique prefix or an alias), so it is
+	// Free: the verb resolves it and refuses an ambiguous or unknown one;
+	// culprit.names lists what the typed word may mean.
+	name := ochazuke.Parameter{Type: "string", Description: "a culprit name, an alias or a unique prefix of one (o-df culprit list; default: the focused row's)", Source: "culprit.names", Free: true}
 	set := func(key, result string, params map[string]ochazuke.Parameter) {
 		op := r.Operations[r.CanonicalKey(key)]
 		op.Parameters, op.Result = params, result
@@ -123,11 +127,14 @@ func (a *App) registerVerbs() {
 		"all":      {Type: "boolean", Description: "include culprits none of whose paths exist"},
 		"external": {Type: "boolean", Description: "also size paths that resolve onto another volume"},
 	})
+	set("culprit.names", "[{id, label}]", map[string]ochazuke.Parameter{
+		ochazuke.ChoicesQueryParameter: {Type: "string", Description: "the word typed so far"},
+	})
 	set("culprit.show", "report", map[string]ochazuke.Parameter{"name": name})
 	set("culprit.size", "{name, bytes, human, files, last_used}", map[string]ochazuke.Parameter{"name": name})
 	set("culprit.clear", "{name, before, after, freed} | {cleared, skipped, freed}", map[string]ochazuke.Parameter{
 		"name":  name,
-		"names": {Type: "array", Description: "several culprit names, cleared after one confirm (o-df free NAME NAME... fills it)"},
+		"names": {Type: "array", Description: "several culprit names (each may be a unique prefix or an alias), cleared after one confirm (o-df free NAME NAME... fills it)"},
 		"all":   {Type: "boolean", Description: "every present rebuildable culprit, after one confirm listing them; culprits that are not rebuildable (downloads, movies) are never included"},
 	})
 	set("culprit.relocate", "{name, dir, moved, freed}", map[string]ochazuke.Parameter{
@@ -168,7 +175,7 @@ func (a *App) bind() error {
 // culprit is the one a verb acts on: --name, else the targeted row's.
 func (a *App) culprit(c ochazuke.Ctx) (Culprit, error) {
 	if n := ochazuke.StringArg(c.Args, "name", ""); n != "" {
-		return a.Cfg.Find(n)
+		return a.Cfg.Resolve(n)
 	}
 	if c.Instance != nil {
 		if rep, ok := c.Instance.Data.(Report); ok {
@@ -218,6 +225,16 @@ func presentOnly(reps []Report) []Report {
 	return out
 }
 
+// culpritNames are the choices for a culprit name (Config.Candidates).
+func (a *App) culpritNames(c ochazuke.Ctx) ochazuke.Result {
+	cs := a.Cfg.Candidates(ochazuke.StringArg(c.Args, ochazuke.ChoicesQueryParameter, ""))
+	out := make([]ochazuke.Choice, len(cs))
+	for i, cu := range cs {
+		out[i] = ochazuke.Choice{ID: cu.Name, Label: cu.Title}
+	}
+	return ochazuke.Done(out)
+}
+
 func (a *App) culpritShow(c ochazuke.Ctx) ochazuke.Result {
 	cu, err := a.culprit(c)
 	if err != nil {
@@ -265,6 +282,9 @@ func (a *App) culpritClear(c ochazuke.Ctx) ochazuke.Result {
 		}))
 	}
 	cu, err := a.culprit(c)
+	if len(names) == 1 {
+		cu, err = a.Cfg.Resolve(names[0])
+	}
 	if err != nil {
 		return ochazuke.Failed(err)
 	}
@@ -326,7 +346,8 @@ type ClearPlan struct {
 }
 
 // planClear sizes the culprits a clear of names (or of all) acts on.
-// Every name must be a rebuildable culprit; all takes every present
+// Every name must resolve to one rebuildable culprit (an ambiguous or
+// unknown name fails the whole plan); all takes every present
 // rebuildable one and never one that is not rebuildable. known, when
 // set, are reports already read (the TUI's rows): a culprit missing
 // from them is absent.
@@ -335,11 +356,11 @@ func (a *App) planClear(ctx context.Context, names []string, all bool, known []R
 	if all {
 		cs = a.Cfg.Culprits
 	} else {
-		for _, n := range names {
-			cu, err := a.Cfg.Find(n)
-			if err != nil {
-				return ClearPlan{}, err
-			}
+		resolved, err := a.Cfg.ResolveAll(names)
+		if err != nil {
+			return ClearPlan{}, err
+		}
+		for _, cu := range resolved {
 			if !cu.Rebuildable {
 				return ClearPlan{}, fmt.Errorf("%s is not rebuildable; o-df clears only rebuildable culprits (relocate moves it instead)", cu.Name)
 			}
@@ -429,14 +450,22 @@ func (a *App) clearMany(ctx context.Context, plan ClearPlan) ClearManyResult {
 
 // checkClear asks once before clearing several culprits (--names, --all):
 // the prompt names each with its size and the total. One culprit keeps
-// the verb's own confirm.
-func (a *App) checkClear(_ *ochazuke.Runtime, _ ochazuke.Context, args ochazuke.Arguments) ochazuke.Verdict {
+// the verb's own confirm, asked about its full name when the word was an
+// abbreviation (checkName).
+func (a *App) checkClear(r *ochazuke.Runtime, _ ochazuke.Context, args ochazuke.Arguments) ochazuke.Verdict {
 	names, all := clearArgs(args)
-	if !all && len(names) < 2 {
-		return ochazuke.Allow()
-	}
 	if all && len(names) > 0 {
 		return ochazuke.Refuse("clear takes culprit names or --all, not both")
+	}
+	if !all && len(names) < 2 {
+		if len(names) == 0 {
+			return ochazuke.Allow()
+		}
+		cu, err := a.Cfg.Resolve(names[0])
+		if err == nil && !cu.Rebuildable {
+			err = fmt.Errorf("%s is not rebuildable; o-df clears only rebuildable culprits (relocate moves it instead)", cu.Name)
+		}
+		return a.checkName(r, "culprit.clear", names[0], cu, err)
 	}
 	plan, err := a.planClear(context.Background(), names, all, a.known())
 	switch {
@@ -449,12 +478,35 @@ func (a *App) checkClear(_ *ochazuke.Runtime, _ ochazuke.Context, args ochazuke.
 }
 
 // checkRelocate refuses a relocate with no destination (no --to, no
-// relocate_to) before its confirm.
-func (a *App) checkRelocate(_ *ochazuke.Runtime, _ ochazuke.Context, args ochazuke.Arguments) ochazuke.Verdict {
+// relocate_to) or an ambiguous or unknown name before its confirm.
+func (a *App) checkRelocate(r *ochazuke.Runtime, _ ochazuke.Context, args ochazuke.Arguments) ochazuke.Verdict {
 	if a.relocateTo(args) == "" {
 		return ochazuke.Refuse(a.noDestination().Error())
 	}
+	if n := ochazuke.StringArg(args, "name", ""); n != "" {
+		cu, err := a.Cfg.Resolve(n)
+		return a.checkName(r, "culprit.relocate", n, cu, err)
+	}
 	return ochazuke.Allow()
+}
+
+// checkName is a destructive verb's check of the one name it was given:
+// refuse what did not resolve; a word that resolved to another name (a
+// prefix, an alias) asks the verb's own confirm about the full name, so
+// the question says what will be acted on; an exact name keeps the
+// verb's confirm as it is.
+func (a *App) checkName(r *ochazuke.Runtime, key, word string, cu Culprit, err error) ochazuke.Verdict {
+	switch {
+	case err != nil:
+		return ochazuke.Refuse(err.Error())
+	case cu.Name == word:
+		return ochazuke.Allow()
+	}
+	op, _ := r.Operation(key)
+	if op.Confirm == "" {
+		return ochazuke.Allow()
+	}
+	return ochazuke.AskFirst(strings.ReplaceAll(op.Confirm, "{{label}}", cu.Name) + fmt.Sprintf(" (%q is %s)", word, cu.Name))
 }
 
 // relocateTo is --to, else the culprits file's relocate_to, else "".
