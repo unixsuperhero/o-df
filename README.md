@@ -3,7 +3,9 @@
 `o-df` (so `o df`) finds and clears the usual disk hogs on a Mac: package
 caches, browser caches, build caches, model downloads, the Downloads folder.
 Each culprit is a row of data, not code: o-df ships a default list and reads
-yours from `~/.config/o-df/culprits.json`.
+yours from `~/.config/o-df/culprits.json`. The defaults name no volume and no
+folder layout: where `relocate` copies to and where your projects live are
+yours to set (see [Configuring culprits](#configuring-culprits)).
 
 ```sh
 o-df                      # the same as o-df scan
@@ -12,7 +14,10 @@ o-df top [PATH] [--depth 2] [--n 30] [--min 100M] [--timeout 5m] [--external] [-
 o-df culprit list [--all] [--format table]
 o-df culprit show NAME
 o-df culprit size NAME
-o-df culprit clear NAME [--yes]
+o-df free NAME... [--yes]   # clear culprits; o-df delete is the same command
+o-df free --all [--yes]     # clear every present rebuildable culprit
+o-df culprit clear NAME [--yes]            # culprit free and culprit delete too
+o-df culprit clear --names '["a","b"]' | --all [--yes]
 o-df culprit relocate NAME [--to DIR] [--link] [--yes]
 o-df tui [--smoke]        # the culprits page
 o-df catalog              # the nouns, verbs and page for a host
@@ -70,15 +75,43 @@ TUI and from a host (`o-df catalog`). Every one prints JSON
 - `clear NAME`: only for a rebuildable culprit, after a confirm (`--yes`
   answers it). It runs the row's `clear` commands, or removes the contents
   of each present path (the directories stay). Read-only trees are made
-  writable first. Prints `{name, before, after, freed}`.
+  writable first. Prints `{name, before, after, freed}`. `free` and `delete`
+  are other names of it (`o-df culprit free NAME`).
+- `clear --names '["a","b"]'` or `clear --all`: several culprits after one
+  confirm that lists each with its size and the total. `--all` takes every
+  present rebuildable culprit; a culprit that is not rebuildable (Downloads,
+  Movies, Trash, Docker, model folders) is never included, and the confirm
+  names the ones it leaves out. Naming one that is not rebuildable refuses
+  the whole request. Prints `{cleared: [{name, before, after, freed}...],
+  skipped, freed}`.
 - `relocate NAME [--to DIR] [--link]`: copies each present path to
-  `DIR/<path under home>` (default DIR: `relocate_to`), compares the copy
+  `DIR/<path under home>` (DIR: `--to`, else `relocate_to` in your culprits
+  file; with neither it fails and says so, it never guesses), compares the copy
   with the source entry by entry (kind, size, symlink target), deletes the
   source and, with `--link`, leaves a symlink to the copy. It refuses a
   destination that exists or that is on the source's volume. Prints
   `{name, dir, moved: [{from, to, bytes, linked}], freed}`.
 
 Both changes refuse `/`, the home directory and anything above it.
+
+## free and delete
+
+`o-df free` (or `o-df delete`, the same command) is `culprit clear` at the
+top level, for several names at once:
+
+```sh
+o-df free npm-cache pnpm-store   # one confirm for both
+o-df free --all                  # every present rebuildable culprit
+o-df delete --all --yes          # without asking
+```
+
+```
+Clear 3 culprits, 860K in all? Their tools rebuild them on demand.
+  pnpm-store     492K
+  npm-cache      296K
+  turbo-cache     72K
+Not rebuildable, never included: downloads 880K. [y/N]
+```
 
 ## The TUI
 
@@ -92,14 +125,16 @@ size of the marked rows.
 | `j` / `k` | move |
 | space | mark or unmark a row |
 | `d d` | clear the marked rows (the focused one when none is marked), one confirm for all |
+| `D` | clear every present rebuildable culprit, one confirm listing them (`culprit.clear {all: true}`) |
 | `m` | relocate the marked rows to `relocate_to`, one confirm for all |
 | `R` | size everything again |
 | `?` | every key |
 | `q` | quit |
 
-The keys are binding rows (`list.apply {verb: clear}`, `list.apply {verb:
-relocate, args: {to}}`), so a `bindings.json` row can add another
-destination key without code.
+The keys are binding rows (`list.apply {verb: clear}`, `culprit.clear {all:
+true}`, `list.apply {verb: relocate}`), so a `bindings.json` row can add a
+key for another destination (`list.apply {verb: relocate, args: {to:
+"/Volumes/Backup/relocated"}}`) or unbind `D` without code.
 
 ## Configuring culprits
 
@@ -112,9 +147,13 @@ drops it. Unknown fields are an error, so a typo does not pass silently.
 ```json
 {
   "relocate_to": "/Volumes/Backup/relocated",
+  "project_roots": ["~/src", "~/code"],
   "culprits": [
+    {"name": "node-modules", "title": "node_modules in projects", "category": "js",
+     "paths": ["{project_root}/*/node_modules"], "rebuildable": true,
+     "rebuild": "npm install", "recommend": "delete"},
     {"name": "sorbet-cache", "title": "Sorbet caches", "category": "ruby",
-     "paths": ["~/src/*/sorbet/.cache"], "rebuildable": true,
+     "paths": ["{project_root}/*/sorbet/.cache"], "rebuildable": true,
      "rebuild": "srb tc rebuilds it", "recommend": "delete"},
     {"name": "docker-build-cache", "paths": ["~/Library/Containers/com.docker.docker"],
      "rebuildable": true, "size": ["sh", "-c", "docker system df --format '{{.Size}}' | head -1"],
@@ -124,11 +163,22 @@ drops it. Unknown fields are an error, so a typo does not pass silently.
 }
 ```
 
+Two top-level settings say where things are on your machine. The defaults
+set neither:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `relocate_to` | none | where `relocate` (and the TUI's `m`) copies to when `--to` is not given; with neither, relocate fails before asking |
+| `project_roots` | none | the directories that hold your projects; a culprit path holding `{project_root}` (the default `turbo-cache` row, your own `node_modules` or `target` rows) expands once per root, and finds nothing while the list is empty |
+| `external` | false | allow paths on other volumes for every row and `top` |
+
+A culprit row's fields:
+
 | Field | Meaning |
 |---|---|
 | `name` | one word, the id (`culprit/NAME`) |
 | `title`, `category`, `notes` | shown in the detail |
-| `paths` | `~`, `$HOME` and `*` (one path segment, `filepath.Glob`); a missing path is absent |
+| `paths` | `~`, `$HOME`, `*` (one path segment, `filepath.Glob`) and `{project_root}` (each of `project_roots`); a missing path is absent |
 | `rebuildable` | the owning tool recreates the data; only these can be cleared |
 | `rebuild` | how it comes back |
 | `size` | a command whose stdout's first integer is the size in bytes, instead of walking `paths` |

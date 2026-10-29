@@ -4,6 +4,7 @@
 //
 //	o-df [scan] [--all] [--json]                 culprits by size, and the disk's totals
 //	o-df top [PATH] [--depth N] [--n N] [--min SIZE] [--json]
+//	o-df free|delete [NAME...] [--all] [--yes]   culprit clear for several names, or every rebuildable one
 //	o-df culprit list|show NAME|size NAME|clear NAME|relocate NAME [--to DIR] [--link] [--yes]
 //	o-df tui [--smoke]                           the culprits page
 //	o-df catalog
@@ -46,21 +47,62 @@ func Main(args []string, env Env, stdin io.Reader, stdout, stderr io.Writer) err
 		return err
 	}
 	a.Stdin, a.Stdout, a.Stderr = stdin, stdout, stderr
-	app := oden.New("o-df", args, oden.WithBuiltins(), oden.WithStdio(stdin, stdout, stderr),
+	app := oden.New("o-df", args, oden.WithBuiltins(), oden.WithStdio(stdin, stdout, stderr), oden.WithCategories(categories),
 		oden.WithDefault(func(_ context.Context, args []string) error {
 			if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 				return oden.ErrNotFound
 			}
 			return scan(a, args)
 		}))
-	ocli.Mount(app, a.Shell())
+	sh := a.Shell()
+	ocli.Mount(app, sh)
 	app.Add(oden.Command{Name: "scan", Summary: "the culprits by size and the disk's totals (o-df with no command too)", Usage: "[--all] [--json] [--timeout 60s] [--external]", Source: "o-df",
 		Run: func(_ context.Context, args []string) error { return scan(a, args) }})
 	app.Add(oden.Command{Name: "top", Summary: "the biggest directories and files under PATH (default .): one parallel walk, this volume only", Usage: "[PATH] [--depth N] [--n N] [--min SIZE] [--timeout 5m] [--external] [--json]", Source: "o-df",
 		Run: func(_ context.Context, args []string) error { return top(a, args) }})
-	app.Add(oden.Command{Name: "tui", Summary: "open the culprits page: the list, the focused culprit's detail; space marks, d d clears, m relocates", Usage: "[--smoke] [--all] [--width N] [--height N]", Source: "o-df",
+	app.Add(oden.Command{Name: "tui", Summary: "open the culprits page: the list, the focused culprit's detail; space marks, d d clears, D clears all, m relocates", Usage: "[--smoke] [--all] [--width N] [--height N]", Source: "o-df",
 		Run: func(_ context.Context, args []string) error { return runTUI(a, args) }, Aliases: []string{"view"}})
+	// free and delete are culprit clear (its free and delete aliases) at
+	// the top level, taking several names: one handler, one confirm.
+	app.Add(oden.Command{Name: "free", Aliases: []string{"delete"}, Summary: "clear culprits by NAME..., or --all: every present rebuildable one (culprit clear; one confirm)", Usage: "[NAME...] [--all] [--yes] [--format F]", Source: "o-df",
+		Run: func(ctx context.Context, args []string) error {
+			return sh.Run(ctx, append([]string{"culprit", "clear"}, freeArgs(args)...))
+		}})
 	return app.Run(context.Background())
+}
+
+// categories group o-df's own commands first in o-df --help; the
+// framework's nouns list under Other.
+var categories = map[string]string{"scan": "Disk", "top": "Disk", "free": "Disk", "culprit": "Disk", "tui": "Disk"}
+
+// valueFlags are the culprit clear flags that take the next word as
+// their value, so free does not read it as a name.
+var valueFlags = map[string]bool{"--format": true, "--target": true, "--json": true, "--name": true, "--names": true}
+
+// freeArgs turns free's words into culprit clear's: one NAME stays the
+// positional name, several become --names.
+func freeArgs(args []string) []string {
+	var names, rest []string
+	for i := 0; i < len(args); i++ {
+		w := args[i]
+		if !strings.HasPrefix(w, "-") {
+			names = append(names, w)
+			continue
+		}
+		rest = append(rest, w)
+		if valueFlags[w] && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+			i++
+			rest = append(rest, args[i])
+		}
+	}
+	switch len(names) {
+	case 0:
+		return rest
+	case 1:
+		return append(names, rest...)
+	}
+	list, _ := json.Marshal(names)
+	return append(rest, "--names", string(list))
 }
 
 func flags(name string, stderr io.Writer) *flag.FlagSet {

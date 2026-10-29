@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -65,6 +66,7 @@ func New(env Env) (*App, error) {
 	}
 	r := ochazuke.NewRuntime()
 	env.External = env.External || cfg.External
+	env.ProjectRoots = cfg.ProjectRoots
 	a := &App{r: r, Env: env, Cfg: cfg, Now: time.Now, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
 	r.Instance(pageID, ochazuke.Kind("df"))
 	if a.list, err = r.AddList(culpritsID, nil, ochazuke.Parent(pageID), ochazuke.Columns(culpritColumns...)); err != nil {
@@ -108,7 +110,7 @@ func (a *App) registerVerbs() {
 		Verb("list", a.culpritList, "every culprit with its size, biggest first: rows {noun, id: culprit/NAME, label, data: report, cells}; --all includes the absent ones").Rows("culprit").Fetch().Quiet().
 		Verb("show", a.culpritShow, "one culprit's row (paths, rebuildable, clear commands, advice) and every path it expands to, sized").Fetch().Quiet().Positional("name").
 		Verb("size", a.culpritSize, "one culprit's size: {name, bytes, human, files, last_used}").Fetch().Quiet().Positional("name").
-		Verb("clear", a.culpritClear, "empty a rebuildable culprit (its clear commands, else its paths' contents): {name, before, after, freed}").Confirm("Clear {{label}}? Its tool rebuilds it on demand.").Positional("name").
+		Verb("clear", a.culpritClear, "empty rebuildable culprits (their clear commands, else their paths' contents): NAME gives {name, before, after, freed}; --names or --all (every present rebuildable culprit, never one that is not rebuildable) ask once, listing each with its size and the total, and give {cleared, skipped, freed}").Confirm("Clear {{label}}? Its tool rebuilds it on demand.").Positional("name").Alias("free", "delete").
 		Verb("relocate", a.culpritRelocate, "copy a culprit's paths to TO/<path under home>, verify, delete the source; --link leaves a symlink: {name, dir, moved, freed}").Confirm("Relocate {{label}} (copy, verify, delete)?").Positional("name")
 	setHistory(r, ochazuke.HistoryChange, "culprit.clear", "culprit.relocate")
 	name := ochazuke.Parameter{Type: "string", Description: "a culprit name (o-df culprit list; default: the focused row's)"}
@@ -123,26 +125,43 @@ func (a *App) registerVerbs() {
 	})
 	set("culprit.show", "report", map[string]ochazuke.Parameter{"name": name})
 	set("culprit.size", "{name, bytes, human, files, last_used}", map[string]ochazuke.Parameter{"name": name})
-	set("culprit.clear", "{name, before, after, freed}", map[string]ochazuke.Parameter{"name": name})
+	set("culprit.clear", "{name, before, after, freed} | {cleared, skipped, freed}", map[string]ochazuke.Parameter{
+		"name":  name,
+		"names": {Type: "array", Description: "several culprit names, cleared after one confirm (o-df free NAME NAME... fills it)"},
+		"all":   {Type: "boolean", Description: "every present rebuildable culprit, after one confirm listing them; culprits that are not rebuildable (downloads, movies) are never included"},
+	})
 	set("culprit.relocate", "{name, dir, moved, freed}", map[string]ochazuke.Parameter{
 		"name":        name,
-		"to":          {Type: "string", Description: "the destination root (default: relocate_to in the culprits file)"},
+		"to":          {Type: "string", Description: "the destination root (default: relocate_to in the culprits file; with neither, relocate fails)"},
 		"link":        {Type: "boolean", Description: "leave a symlink at each old path"},
 		"same-volume": {Type: "boolean", Description: "allow a destination on the source's volume (frees nothing)"},
 	})
+	// Checks run before the verbs' confirms, from every path: clearing
+	// several culprits asks one question naming each with its size;
+	// relocating without a destination fails before asking anything.
+	must(r.AddVerbCheck("culprit.clear", ochazuke.VerbCheck{Name: "clear-many", Check: a.checkClear}))
+	must(r.AddVerbCheck("culprit.relocate", ochazuke.VerbCheck{Name: "destination", Check: a.checkRelocate}))
+}
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
 }
 
 // bind installs the key rows: d d clears the marked rows (the focused one
-// when none is marked), m relocates them to relocate_to, R reloads, q
+// when none is marked), D clears every present rebuildable culprit (one
+// confirm), m relocates the marked rows to relocate_to, R reloads, q
 // quits. Space marks (the list noun's row); j/k move.
 func (a *App) bind() error {
 	r := a.r
 	r.Define("df").Mode("normal").
 		Bind("R", ochazuke.Do("culprit.list")).
+		Bind("D", ochazuke.Do("culprit.clear", ochazuke.Arguments{"all": true}).Hinted("clear all")).
 		Bind("q", ochazuke.Do("app.quit"))
 	r.Define("culprit").Mode("normal").
 		Bind("d d", ochazuke.Do("list.apply", ochazuke.Arguments{"verb": "clear"}).Hinted("clear")).
-		Bind("m", ochazuke.Do("list.apply", ochazuke.Arguments{"verb": "relocate", "args": map[string]any{"to": a.Cfg.RelocateTo}}).Hinted("relocate"))
+		Bind("m", ochazuke.Do("list.apply", ochazuke.Arguments{"verb": "relocate"}).Hinted("relocate"))
 	return nil
 }
 
@@ -228,6 +247,23 @@ func (a *App) culpritSize(c ochazuke.Ctx) ochazuke.Result {
 }
 
 func (a *App) culpritClear(c ochazuke.Ctx) ochazuke.Result {
+	names, all := clearArgs(c.Args)
+	if all || len(names) > 1 {
+		if all && len(names) > 0 {
+			return ochazuke.Failed(errors.New("clear takes culprit names or --all, not both"))
+		}
+		known := a.known()
+		return ochazuke.Pending(func(ctx context.Context) (any, error) {
+			plan, err := a.planClear(ctx, names, all, known)
+			if err != nil {
+				return nil, err
+			}
+			return a.clearMany(ctx, plan), nil
+		}).Then(a.changed(func(v any) string {
+			res := v.(ClearManyResult)
+			return fmt.Sprintf("cleared %d culprits, freed %s", len(res.Cleared), Human(res.Freed))
+		}))
+	}
 	cu, err := a.culprit(c)
 	if err != nil {
 		return ochazuke.Failed(err)
@@ -243,12 +279,205 @@ func (a *App) culpritClear(c ochazuke.Ctx) ochazuke.Result {
 	}))
 }
 
+// clearArgs are clear's names (name, then names, once each) and --all.
+func clearArgs(args ochazuke.Arguments) (names []string, all bool) {
+	all, _ = args["all"].(bool)
+	add := func(n string) {
+		if n = strings.TrimSpace(n); n != "" && !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	add(ochazuke.StringArg(args, "name", ""))
+	switch v := args["names"].(type) {
+	case []string:
+		for _, n := range v {
+			add(n)
+		}
+	case []any:
+		for _, n := range v {
+			add(fmt.Sprint(n))
+		}
+	case string:
+		for _, n := range strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' }) {
+			add(n)
+		}
+	}
+	return names, all
+}
+
+// known is what the TUI last sized (the list's rows), so asking about
+// several culprits does not walk them again; nil on the command line,
+// where the plan sizes them.
+func (a *App) known() []Report {
+	if !a.tui || a.reports == nil {
+		return nil
+	}
+	return slices.Clone(a.reports)
+}
+
+// ClearPlan is what clearing several culprits will do: the culprits to
+// clear with their sizes, and the present ones --all leaves out because
+// they are not rebuildable.
+type ClearPlan struct {
+	Clear    []Report
+	Excluded []Report
+	Skipped  []string
+	Total    int64
+}
+
+// planClear sizes the culprits a clear of names (or of all) acts on.
+// Every name must be a rebuildable culprit; all takes every present
+// rebuildable one and never one that is not rebuildable. known, when
+// set, are reports already read (the TUI's rows): a culprit missing
+// from them is absent.
+func (a *App) planClear(ctx context.Context, names []string, all bool, known []Report) (ClearPlan, error) {
+	var cs []Culprit
+	if all {
+		cs = a.Cfg.Culprits
+	} else {
+		for _, n := range names {
+			cu, err := a.Cfg.Find(n)
+			if err != nil {
+				return ClearPlan{}, err
+			}
+			if !cu.Rebuildable {
+				return ClearPlan{}, fmt.Errorf("%s is not rebuildable; o-df clears only rebuildable culprits (relocate moves it instead)", cu.Name)
+			}
+			cs = append(cs, cu)
+		}
+	}
+	var reps []Report
+	if known != nil {
+		for _, cu := range cs {
+			i := slices.IndexFunc(known, func(r Report) bool { return r.Name == cu.Name })
+			if i >= 0 {
+				reps = append(reps, known[i])
+			} else {
+				reps = append(reps, Report{Culprit: cu})
+			}
+		}
+	} else {
+		reps = ProbeAll(ctx, a.Env, cs)
+	}
+	var plan ClearPlan
+	for _, r := range reps {
+		switch {
+		case !r.Present:
+			if !all {
+				plan.Skipped = append(plan.Skipped, r.Name+": none of its paths is present")
+			}
+		case !r.Rebuildable:
+			plan.Excluded = append(plan.Excluded, r)
+		default:
+			plan.Clear = append(plan.Clear, r)
+			plan.Total += r.Bytes
+		}
+	}
+	return plan, ctx.Err()
+}
+
+// Prompt is the one question clearing several culprits asks.
+func (p ClearPlan) Prompt() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Clear %d culprits, %s in all? Their tools rebuild them on demand.\n", len(p.Clear), Human(p.Total))
+	width := 0
+	for _, r := range p.Clear {
+		width = max(width, len(r.Name))
+	}
+	for _, r := range p.Clear {
+		fmt.Fprintf(&b, "  %-*s  %6s\n", width, r.Name, Human(r.Bytes))
+	}
+	for _, s := range p.Skipped {
+		fmt.Fprintf(&b, "  skipped %s\n", s)
+	}
+	if len(p.Excluded) > 0 {
+		var ex []string
+		for _, r := range p.Excluded {
+			ex = append(ex, r.Name+" "+Human(r.Bytes))
+		}
+		fmt.Fprintf(&b, "Not rebuildable, never included: %s.", strings.Join(ex, ", "))
+	} else {
+		b.WriteString("Culprits that are not rebuildable (downloads, movies) are never included.")
+	}
+	return b.String()
+}
+
+// ClearManyResult is what clearing several culprits did: each culprit's
+// result, the ones that failed or had nothing present, and the total
+// freed.
+type ClearManyResult struct {
+	Cleared []ClearResult `json:"cleared"`
+	Skipped []string      `json:"skipped,omitempty"`
+	Freed   int64         `json:"freed"`
+}
+
+func (a *App) clearMany(ctx context.Context, plan ClearPlan) ClearManyResult {
+	res := ClearManyResult{Cleared: []ClearResult{}, Skipped: plan.Skipped}
+	for _, r := range plan.Clear {
+		one, err := Clear(ctx, a.Env, r.Culprit)
+		if err != nil {
+			res.Skipped = append(res.Skipped, r.Name+": "+err.Error())
+			if one.Freed == 0 {
+				continue
+			}
+		}
+		res.Cleared = append(res.Cleared, one)
+		res.Freed += one.Freed
+	}
+	return res
+}
+
+// checkClear asks once before clearing several culprits (--names, --all):
+// the prompt names each with its size and the total. One culprit keeps
+// the verb's own confirm.
+func (a *App) checkClear(_ *ochazuke.Runtime, _ ochazuke.Context, args ochazuke.Arguments) ochazuke.Verdict {
+	names, all := clearArgs(args)
+	if !all && len(names) < 2 {
+		return ochazuke.Allow()
+	}
+	if all && len(names) > 0 {
+		return ochazuke.Refuse("clear takes culprit names or --all, not both")
+	}
+	plan, err := a.planClear(context.Background(), names, all, a.known())
+	switch {
+	case err != nil:
+		return ochazuke.Refuse(err.Error())
+	case len(plan.Clear) == 0:
+		return ochazuke.Refuse("nothing to clear: no rebuildable culprit is present")
+	}
+	return ochazuke.AskFirst(plan.Prompt())
+}
+
+// checkRelocate refuses a relocate with no destination (no --to, no
+// relocate_to) before its confirm.
+func (a *App) checkRelocate(_ *ochazuke.Runtime, _ ochazuke.Context, args ochazuke.Arguments) ochazuke.Verdict {
+	if a.relocateTo(args) == "" {
+		return ochazuke.Refuse(a.noDestination().Error())
+	}
+	return ochazuke.Allow()
+}
+
+// relocateTo is --to, else the culprits file's relocate_to, else "".
+func (a *App) relocateTo(args ochazuke.Arguments) string {
+	if to := ochazuke.StringArg(args, "to", ""); to != "" {
+		return to
+	}
+	return a.Cfg.RelocateTo
+}
+
+func (a *App) noDestination() error {
+	return fmt.Errorf("relocate needs a destination and none is set: pass --to DIR, or set \"relocate_to\" in %s", a.Env.UserFile)
+}
+
 func (a *App) culpritRelocate(c ochazuke.Ctx) ochazuke.Result {
 	cu, err := a.culprit(c)
 	if err != nil {
 		return ochazuke.Failed(err)
 	}
-	o := RelocateOptions{To: ochazuke.StringArg(c.Args, "to", a.Cfg.RelocateTo)}
+	o := RelocateOptions{To: a.relocateTo(c.Args)}
+	if o.To == "" {
+		return ochazuke.Failed(a.noDestination())
+	}
 	o.Link, _ = c.Args["link"].(bool)
 	o.SameVolume, _ = c.Args["same-volume"].(bool)
 	return ochazuke.Pending(func(ctx context.Context) (any, error) {

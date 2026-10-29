@@ -36,7 +36,9 @@ func fixture(t *testing.T) Env {
 	write("Downloads/big.zip", 256<<10)
 	write("src/one/.turbo/cache/blob", 16<<10)
 	write("src/two/.turbo/cache/blob", 16<<10)
-	return Env{Home: home, UserFile: filepath.Join(home, ".config/o-df/culprits.json")}
+	env := Env{Home: home, UserFile: filepath.Join(home, ".config/o-df/culprits.json")}
+	userFile(t, env, `{"project_roots": ["~/src"], "culprits": []}`)
+	return env
 }
 
 func userFile(t *testing.T, env Env, cfg string) {
@@ -61,8 +63,10 @@ func TestDefaultsLoadAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Culprits) < 20 || cfg.RelocateTo == "" {
-		t.Fatalf("defaults: %d rows, relocate_to %q", len(cfg.Culprits), cfg.RelocateTo)
+	// The defaults name no volume and no folder layout: relocate_to and
+	// project_roots come from the user's file.
+	if len(cfg.Culprits) < 20 || cfg.RelocateTo != "" || len(cfg.ProjectRoots) != 0 {
+		t.Fatalf("defaults: %d rows, relocate_to %q, project_roots %v", len(cfg.Culprits), cfg.RelocateTo, cfg.ProjectRoots)
 	}
 	for _, c := range cfg.Culprits {
 		if c.Recommend != "delete" && c.Recommend != "relocate" && c.Recommend != "keep" {
@@ -107,6 +111,7 @@ func TestUserFileRejectsUnknownFields(t *testing.T) {
 func TestProbeSizesGlobsAndAbsent(t *testing.T) {
 	env := fixture(t)
 	cfg, _ := Load(env)
+	env.ProjectRoots = cfg.ProjectRoots
 	turbo, _ := cfg.Find("turbo-cache")
 	r := Probe(context.Background(), env, turbo)
 	if !r.Present || r.Files != 2 || r.Bytes < 32<<10 {
@@ -133,6 +138,7 @@ func TestProbeShowsSymlinkAsRelocated(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, _ := Load(env)
+	env.ProjectRoots = cfg.ProjectRoots
 	c, _ := cfg.Find("go-build-cache")
 	r := Probe(context.Background(), env, c)
 	if r.Present || r.Found[0].State != "symlink" || r.Found[0].Target != target {
@@ -443,6 +449,7 @@ func TestExternalVolumeSkippedByDefault(t *testing.T) {
 	env := fixture(t)
 	ext := external(t, env)
 	cfg, _ := Load(env)
+	env.ProjectRoots = cfg.ProjectRoots
 	turbo, _ := cfg.Find("turbo-cache")
 	r := Probe(context.Background(), env, turbo)
 	var states []string
@@ -469,12 +476,13 @@ func TestExternalOptIn(t *testing.T) {
 	env := fixture(t)
 	external(t, env)
 	cfg, _ := Load(env)
+	env.ProjectRoots = cfg.ProjectRoots
 	turbo, _ := cfg.Find("turbo-cache")
 	turbo.External = true
 	if r := Probe(context.Background(), env, turbo); r.Bytes < 512<<10 {
 		t.Fatalf("row opt-in: bytes %d", r.Bytes)
 	}
-	userFile(t, env, `{"external": true, "culprits": []}`)
+	userFile(t, env, `{"external": true, "project_roots": ["~/src"], "culprits": []}`)
 	out, err := run(t, env, "scan", "--json")
 	if err != nil {
 		t.Fatal(err, out)
@@ -499,5 +507,233 @@ func TestTopTimeoutIsPartial(t *testing.T) {
 	}
 	if !res.Partial {
 		t.Fatalf("not partial: %+v", res)
+	}
+}
+
+func TestProjectRootsExpandPlaceholder(t *testing.T) {
+	env := fixture(t)
+	write := func(rel string) {
+		p := filepath.Join(env.Home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, bytes.Repeat([]byte("x"), 8<<10), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("work/three/.turbo/cache/blob")
+	write("src/one/node_modules/left-pad/index.js")
+	write("work/three/node_modules/left-pad/index.js")
+	probe := func(name string) Report {
+		t.Helper()
+		a, err := New(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := a.Cfg.Find(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Probe(context.Background(), a.Env, c)
+	}
+	// No roots: a per-project row finds nothing.
+	userFile(t, env, `{"culprits": []}`)
+	if r := probe("turbo-cache"); r.Present || len(r.Found) != 0 {
+		t.Fatalf("no roots, yet turbo-cache found %+v", r.Found)
+	}
+	// Two roots: every row holding {project_root}, the default's and the
+	// user's own, expands under each.
+	userFile(t, env, `{"project_roots": ["~/src", "$HOME/work/"], "culprits": [
+		{"name": "node-modules", "paths": ["{project_root}/*/node_modules"], "rebuildable": true, "recommend": "delete"}]}`)
+	for _, name := range []string{"turbo-cache", "node-modules"} {
+		r := probe(name)
+		var present []string
+		for _, f := range r.Found {
+			if f.State == "present" {
+				present = append(present, f.Path)
+			}
+		}
+		want := map[string]int{"turbo-cache": 3, "node-modules": 2}[name]
+		if len(present) != want {
+			t.Errorf("%s: present %v, want %d paths", name, present, want)
+		}
+	}
+	userFile(t, env, `{"project_roots": [""], "culprits": []}`)
+	if _, err := Load(env); err == nil {
+		t.Error("an empty project root loaded")
+	}
+}
+
+func TestRelocateWithoutDestinationFails(t *testing.T) {
+	env := fixture(t)
+	out, err := run(t, env, "culprit", "relocate", "downloads", "--yes")
+	if err == nil || !strings.Contains(err.Error(), "relocate needs a destination") || !strings.Contains(err.Error(), "relocate_to") {
+		t.Fatalf("relocate without a destination: %v %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(env.Home, "Downloads/big.zip")); err != nil {
+		t.Fatal(err)
+	}
+	// It fails before asking: no prompt was printed.
+	if strings.Contains(out, "Relocate downloads") {
+		t.Errorf("asked before failing: %s", out)
+	}
+	// relocate_to in the user's file is the destination when --to is not given.
+	to := t.TempDir()
+	userFile(t, env, `{"relocate_to": "`+to+`", "culprits": []}`)
+	if out, err := run(t, env, "culprit", "relocate", "downloads", "--same-volume", "--yes"); err != nil {
+		t.Fatal(err, out)
+	}
+	if _, err := os.Stat(filepath.Join(to, "Downloads/big.zip")); err != nil {
+		t.Fatalf("not relocated to relocate_to: %v", err)
+	}
+}
+
+func TestClearAllSkipsNotRebuildable(t *testing.T) {
+	env := fixture(t)
+	var out, errb bytes.Buffer
+	if err := Main([]string{"culprit", "clear", "--all"}, env, strings.NewReader("y\n"), &out, &errb); err != nil {
+		t.Fatal(err, out.String(), errb.String())
+	}
+	text := out.String() + errb.String()
+	// One question names each culprit with its size, the total and what
+	// is left out.
+	for _, want := range []string{"Clear 3 culprits", "npm-cache", "pnpm-store", "turbo-cache", "Not rebuildable, never included: downloads"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("clear --all lacks %q:\n%s", want, text)
+		}
+	}
+	if n := strings.Count(text, "Clear 3 culprits"); n != 1 {
+		t.Errorf("asked %d times", n)
+	}
+	var res ClearManyResult
+	if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+		t.Fatal(err, out.String())
+	}
+	if len(res.Cleared) != 3 || res.Freed < 200<<10 {
+		t.Fatalf("result %+v", res)
+	}
+	for _, c := range res.Cleared {
+		if c.Name == "downloads" || c.Freed == 0 {
+			t.Errorf("cleared %+v", c)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(env.Home, "Downloads/big.zip")); err != nil {
+		t.Fatalf("--all reached downloads: %v", err)
+	}
+	if names, _ := readNames(filepath.Join(env.Home, "Library/pnpm/store")); len(names) != 0 {
+		t.Errorf("store still holds %v", names)
+	}
+}
+
+func TestClearAllDeclined(t *testing.T) {
+	env := fixture(t)
+	var out, errb bytes.Buffer
+	if err := Main([]string{"free", "--all"}, env, strings.NewReader("n\n"), &out, &errb); err == nil {
+		t.Fatalf("declined, yet: %s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(env.Home, ".npm/_cacache/a")); err != nil {
+		t.Fatalf("cleared after answering no: %v", err)
+	}
+}
+
+func TestFreeAndDeleteReachClear(t *testing.T) {
+	env := fixture(t)
+	out, err := run(t, env, "free", "npm-cache", "pnpm-store", "--yes")
+	if err != nil {
+		t.Fatal(err, out)
+	}
+	if !strings.Contains(out, `"cleared"`) || !strings.Contains(out, `"name": "npm-cache"`) || !strings.Contains(out, `"name": "pnpm-store"`) {
+		t.Fatalf("free: %s", out)
+	}
+	for _, p := range []string{".npm/_cacache/a", "Library/pnpm/store/v10/f"} {
+		if _, err := os.Stat(filepath.Join(env.Home, p)); err == nil {
+			t.Errorf("%s survived free", p)
+		}
+	}
+	if out, err := run(t, env, "delete", "turbo-cache", "--yes"); err != nil || !strings.Contains(out, `"freed"`) {
+		t.Fatalf("delete: %v %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(env.Home, "src/one/.turbo/cache/blob")); err == nil {
+		t.Error("turbo survived delete")
+	}
+	// The culprit noun's own aliases.
+	for _, verb := range []string{"free", "delete"} {
+		if out, err := run(t, env, "culprit", verb, "nope", "--yes"); err == nil || !strings.Contains(out+err.Error(), `no culprit "nope"`) {
+			t.Fatalf("culprit %s is not clear: %v %s", verb, err, out)
+		}
+	}
+	// A culprit that is not rebuildable among the names refuses them all.
+	env = fixture(t)
+	if out, err := run(t, env, "free", "npm-cache", "downloads", "--yes"); err == nil || !strings.Contains(err.Error(), "not rebuildable") {
+		t.Fatalf("free with downloads: %v %s", err, out)
+	}
+	for _, p := range []string{".npm/_cacache/a", "Downloads/big.zip"} {
+		if _, err := os.Stat(filepath.Join(env.Home, p)); err != nil {
+			t.Errorf("%s was touched: %v", p, err)
+		}
+	}
+	if _, err := run(t, env, "free", "npm-cache", "--all", "--yes"); err == nil {
+		t.Error("names and --all together ran")
+	}
+}
+
+func TestHelpListsFreeBesideScan(t *testing.T) {
+	out, err := run(t, fixture(t), "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, _, _ := strings.Cut(out, "Other:")
+	for _, want := range []string{"free, delete", "scan", "top", "culprit"} {
+		if !strings.Contains(disk, want) {
+			t.Errorf("the Disk group lacks %q:\n%s", want, disk)
+		}
+	}
+}
+
+func TestFreeArgs(t *testing.T) {
+	for in, want := range map[string]string{
+		"a":                      "a",
+		"a b --yes":              `--yes --names ["a","b"]`,
+		"--all --yes":            "--all --yes",
+		"--format table a b":     `--format table --names ["a","b"]`,
+		"a --target df/culprits": "a --target df/culprits",
+	} {
+		if got := strings.Join(freeArgs(strings.Fields(in)), " "); got != want {
+			t.Errorf("freeArgs(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// D's request (culprit.clear {all: true}) on the page asks once, from the
+// sizes the list already read, and y clears every rebuildable row.
+func TestClearAllKeyRequest(t *testing.T) {
+	env := fixture(t)
+	a, err := New(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.r.Execute(ochazuke.Request{Noun: "culprit", Verb: "list", Target: pageID}); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, a)
+	a.tui = true
+	if _, err := a.r.Execute(ochazuke.Request{Noun: "culprit", Verb: "clear", Target: pageID, Args: ochazuke.Arguments{"all": true}}); err != nil {
+		t.Fatal(err)
+	}
+	top := a.r.Instances[a.r.TopModal()]
+	if top == nil || top.Noun != "ochazuke.confirm" || !strings.Contains(top.Payload.Prompt, "Clear 3 culprits") || !strings.Contains(top.Payload.Prompt, "downloads") {
+		t.Fatalf("no confirm naming the culprits: %+v", top)
+	}
+	if _, err := a.r.Execute(ochazuke.Request{Noun: "ochazuke.confirm", Verb: "accept"}); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, a)
+	for _, p := range []string{".npm/_cacache/a", "Library/pnpm/store/v10/f", "src/one/.turbo/cache/blob"} {
+		if _, err := os.Stat(filepath.Join(env.Home, p)); err == nil {
+			t.Errorf("%s survived", p)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(env.Home, "Downloads/big.zip")); err != nil {
+		t.Fatal(err)
 	}
 }

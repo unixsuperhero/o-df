@@ -44,7 +44,11 @@ type Report struct {
 // Probe sizes one culprit.
 func Probe(ctx context.Context, env Env, c Culprit) Report {
 	r := Report{Culprit: c}
+	var paths []string
 	for _, p := range c.Paths {
+		paths = append(paths, env.Templates(p)...)
+	}
+	for _, p := range paths {
 		matches, literal := env.Expand(p)
 		if len(matches) == 0 {
 			r.Found = append(r.Found, PathUsage{Path: literal, State: "absent"})

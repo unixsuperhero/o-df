@@ -28,7 +28,9 @@ type Culprit struct {
 	Title    string `json:"title,omitempty"`
 	Category string `json:"category,omitempty"`
 	// Paths are ~-relative or absolute; a * matches within one path
-	// segment (filepath.Glob). A missing path is absent, not an error.
+	// segment (filepath.Glob). A path holding {project_root} stands for
+	// one path per entry of the file's project_roots (none when the list
+	// is empty). A missing path is absent, not an error.
 	Paths []string `json:"paths"`
 	// Rebuildable says the owning tool recreates the data on demand; only
 	// a rebuildable culprit can be cleared.
@@ -55,7 +57,14 @@ type Culprit struct {
 // Config is a culprits file.
 type Config struct {
 	// RelocateTo is the directory relocate uses when --to is not given.
+	// The defaults set none: relocate without either fails, it never
+	// guesses a volume.
 	RelocateTo string `json:"relocate_to,omitempty"`
+	// ProjectRoots are the directories that hold projects (~/src, say);
+	// a culprit path holding {project_root} expands once per root. The
+	// defaults set none, so per-project rows find nothing until the
+	// user's file names their roots.
+	ProjectRoots []string `json:"project_roots,omitempty"`
 	// External lets every row (and top) read paths on other volumes.
 	External bool      `json:"external,omitempty"`
 	Culprits []Culprit `json:"culprits"`
@@ -68,7 +77,13 @@ type Env struct {
 	// External allows paths that resolve onto another volume than the
 	// home directory's (the culprits file's "external", --external).
 	External bool
+	// ProjectRoots fill {project_root} in culprit paths (the culprits
+	// file's "project_roots").
+	ProjectRoots []string
 }
+
+// ProjectRootPlaceholder in a culprit path stands for each project root.
+const ProjectRootPlaceholder = "{project_root}"
 
 // DefaultEnv reads HOME and the config directory ($O_DF_CULPRITS, else
 // $XDG_CONFIG_HOME/o-df/culprits.json, else ~/.config/o-df/culprits.json).
@@ -130,6 +145,9 @@ func merge(base, user Config, source string) Config {
 	if user.RelocateTo != "" {
 		base.RelocateTo = user.RelocateTo
 	}
+	if user.ProjectRoots != nil {
+		base.ProjectRoots = user.ProjectRoots
+	}
 	base.External = base.External || user.External
 	for _, c := range user.Culprits {
 		c.Source = source
@@ -143,6 +161,11 @@ func merge(base, user Config, source string) Config {
 }
 
 func validate(cfg Config) error {
+	for _, root := range cfg.ProjectRoots {
+		if strings.TrimSpace(root) == "" || strings.Contains(root, ProjectRootPlaceholder) {
+			return fmt.Errorf("project_roots: %q is not a directory", root)
+		}
+	}
 	seen := map[string]bool{}
 	for _, c := range cfg.Culprits {
 		switch {
@@ -171,6 +194,19 @@ func (cfg Config) Find(name string) (Culprit, error) {
 		}
 	}
 	return Culprit{}, fmt.Errorf("no culprit %q (o-df culprit list names them)", name)
+}
+
+// Templates are a culprit path with {project_root} filled in once per
+// project root (no paths when there are none), else the path alone.
+func (env Env) Templates(p string) []string {
+	if !strings.Contains(p, ProjectRootPlaceholder) {
+		return []string{p}
+	}
+	out := make([]string, 0, len(env.ProjectRoots))
+	for _, root := range env.ProjectRoots {
+		out = append(out, strings.ReplaceAll(p, ProjectRootPlaceholder, strings.TrimRight(root, "/")))
+	}
+	return out
 }
 
 // Expand is a path with ~ and $HOME made absolute, its globs matched; the
