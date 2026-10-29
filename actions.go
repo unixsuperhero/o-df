@@ -19,6 +19,27 @@ import (
 // both refuse a path that is /, the home directory or above it, so a bad
 // row in the user's file cannot empty the home.
 
+// ExecCommand runs argv as a process: the real binary's Env.Run.
+func ExecCommand(ctx context.Context, argv []string) ([]byte, error) {
+	return exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+}
+
+// CommandRunner is what runs a clear command: Env.Run, else ExecCommand
+// when Home is the real home directory. A Home that is not (a test's temp
+// HOME) with no runner set is refused: a clear command acts on the
+// process's environment (go clean -modcache reads GOMODCACHE), not on
+// Home, so it would reach the real caches.
+func (env Env) CommandRunner() (func(context.Context, []string) ([]byte, error), error) {
+	if env.Run != nil {
+		return env.Run, nil
+	}
+	real, err := os.UserHomeDir()
+	if err != nil || filepath.Clean(real) != filepath.Clean(env.Home) {
+		return nil, fmt.Errorf("refusing to run a clear command: %s is not the home directory and no command runner is set (Env.Run)", env.Home)
+	}
+	return ExecCommand, nil
+}
+
 // ClearResult is what clear did.
 type ClearResult struct {
 	Name    string   `json:"name"`
@@ -47,9 +68,13 @@ func Clear(ctx context.Context, env Env, c Culprit) (ClearResult, error) {
 		}
 	}
 	if len(c.Clear) > 0 {
+		run, err := env.CommandRunner()
+		if err != nil {
+			return res, err
+		}
 		for _, argv := range c.Clear {
 			for _, cmd := range expandCommand(argv, paths) {
-				out, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).CombinedOutput()
+				out, err := run(ctx, cmd)
 				res.Ran = append(res.Ran, strings.Join(cmd, " "))
 				if err != nil {
 					return res, fmt.Errorf("%s: %w: %s", strings.Join(cmd, " "), err, strings.TrimSpace(string(out)))

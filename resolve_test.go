@@ -11,17 +11,12 @@ import (
 
 // Culprit names resolve like oden's command words: exact, alias, unique
 // prefix (resolve.go). Every test runs on the temp HOME fixture plus the
-// Go build and Homebrew caches. go-mod-cache stays absent: its clear is a
-// command (go clean -modcache), which reads the process's GOMODCACHE, not
-// the fixture, so a present row would clear the real module cache. HOME,
-// GOPATH and GOMODCACHE point into the fixture as well, in case one does.
+// Go build and Homebrew caches. Clear commands go to the fixture's
+// recording runner, never to a process.
 
 func goFixture(t *testing.T) Env {
 	t.Helper()
 	env := fixture(t)
-	t.Setenv("HOME", env.Home)
-	t.Setenv("GOPATH", filepath.Join(env.Home, "go"))
-	t.Setenv("GOMODCACHE", filepath.Join(env.Home, "go/pkg/mod"))
 	for _, rel := range []string{"Library/Caches/go-build/aa/x", "Library/Caches/Homebrew/x.tar.gz"} {
 		p := filepath.Join(env.Home, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -164,6 +159,16 @@ func TestResolveSeveralNames(t *testing.T) {
 		}
 	}
 	present(t, env, ".npm/_cacache/a", "Library/Caches/go-build/aa/x")
+
+	// Two words for one culprit ask about one culprit, singular.
+	env = goFixture(t)
+	var o1, e1 bytes.Buffer
+	if err := Main([]string{"free", "npm", "npm-cache"}, env, strings.NewReader("n\n"), &o1, &e1); err == nil {
+		t.Fatal("declined, yet ran")
+	}
+	if !strings.Contains(e1.String(), "Clear 1 culprit, ") || strings.Contains(e1.String(), "1 culprits") {
+		t.Errorf("singular prompt: %s", e1.String())
+	}
 
 	// --names JSON resolves the same way, and two words for one culprit
 	// clear it once.

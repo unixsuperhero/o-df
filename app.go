@@ -278,7 +278,7 @@ func (a *App) culpritClear(c ochazuke.Ctx) ochazuke.Result {
 			return a.clearMany(ctx, plan), nil
 		}).Then(a.changed(func(v any) string {
 			res := v.(ClearManyResult)
-			return fmt.Sprintf("cleared %d culprits, freed %s", len(res.Cleared), Human(res.Freed))
+			return fmt.Sprintf("cleared %s, freed %s", culprits(len(res.Cleared)), Human(res.Freed))
 		}))
 	}
 	cu, err := a.culprit(c)
@@ -400,7 +400,11 @@ func (a *App) planClear(ctx context.Context, names []string, all bool, known []R
 // Prompt is the one question clearing several culprits asks.
 func (p ClearPlan) Prompt() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Clear %d culprits, %s in all? Their tools rebuild them on demand.\n", len(p.Clear), Human(p.Total))
+	if len(p.Clear) == 1 {
+		fmt.Fprintf(&b, "Clear 1 culprit, %s? Its tool rebuilds it on demand.\n", Human(p.Total))
+	} else {
+		fmt.Fprintf(&b, "Clear %s, %s in all? Their tools rebuild them on demand.\n", culprits(len(p.Clear)), Human(p.Total))
+	}
 	width := 0
 	for _, r := range p.Clear {
 		width = max(width, len(r.Name))
@@ -421,6 +425,14 @@ func (p ClearPlan) Prompt() string {
 		b.WriteString("Culprits that are not rebuildable (downloads, movies) are never included.")
 	}
 	return b.String()
+}
+
+// culprits is n with the noun: 1 culprit, 3 culprits.
+func culprits(n int) string {
+	if n == 1 {
+		return "1 culprit"
+	}
+	return fmt.Sprintf("%d culprits", n)
 }
 
 // ClearManyResult is what clearing several culprits did: each culprit's

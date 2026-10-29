@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/unixsuperhero/ochazuke"
@@ -37,8 +39,43 @@ func fixture(t *testing.T) Env {
 	write("src/one/.turbo/cache/blob", 16<<10)
 	write("src/two/.turbo/cache/blob", 16<<10)
 	env := Env{Home: home, UserFile: filepath.Join(home, ".config/o-df/culprits.json")}
+	rec := &recorder{}
+	recorders.Store(home, rec)
+	env.Run = rec.run
 	userFile(t, env, `{"project_roots": ["~/src"], "culprits": []}`)
 	return env
+}
+
+// recorder is every fixture's command runner: it records each clear
+// command's argv and runs nothing, so no test can reach a real cache
+// through a row's clear commands (go clean -modcache acts on the
+// process's GOMODCACHE, not the fixture's HOME).
+type recorder struct {
+	mu    sync.Mutex
+	calls [][]string
+}
+
+func (r *recorder) run(_ context.Context, argv []string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, slices.Clone(argv))
+	return nil, nil
+}
+
+// recorders are the fixtures' runners by HOME.
+var recorders sync.Map
+
+// ran is the argv the fixture's runner was called with.
+func ran(t *testing.T, env Env) [][]string {
+	t.Helper()
+	v, ok := recorders.Load(env.Home)
+	if !ok {
+		t.Fatalf("no recorder for %s", env.Home)
+	}
+	rec := v.(*recorder)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return slices.Clone(rec.calls)
 }
 
 func userFile(t *testing.T, env Env, cfg string) {
@@ -224,15 +261,74 @@ func TestClearAsksWithoutYes(t *testing.T) {
 
 func TestClearCommandsRunPerPath(t *testing.T) {
 	env := fixture(t)
-	log := filepath.Join(env.Home, "ran.log")
 	userFile(t, env, `{"culprits": [{"name": "npm-cache", "paths": ["~/.npm/_cacache", "~/.npm/_npx"], "rebuildable": true,
-		"clear": [["sh", "-c", "echo $0 >> `+log+`", "{path}"]]}]}`)
+		"clear": [["tool", "clean", "{path}"]]}]}`)
 	if out, err := run(t, env, "culprit", "clear", "npm-cache", "--yes"); err != nil {
 		t.Fatal(err, out)
 	}
-	data, _ := os.ReadFile(log)
-	if got := strings.Count(string(data), "\n"); got != 2 {
-		t.Fatalf("ran %d times: %s", got, data)
+	calls := ran(t, env)
+	if len(calls) != 2 {
+		t.Fatalf("ran %d times: %v", len(calls), calls)
+	}
+	for i, rel := range []string{".npm/_cacache", ".npm/_npx"} {
+		want := []string{"tool", "clean", filepath.Join(env.Home, rel)}
+		if got := calls[i]; got[0] != want[0] || got[1] != want[1] || !strings.HasSuffix(got[2], rel) {
+			t.Errorf("call %d = %v, want %v", i, got, want)
+		}
+	}
+}
+
+// Without a runner, a Home that is not the real home directory never
+// runs a clear command.
+func TestClearCommandRefusedWithoutRunner(t *testing.T) {
+	env := fixture(t)
+	env.Run = nil
+	log := filepath.Join(env.Home, "ran.log")
+	userFile(t, env, `{"culprits": [{"name": "npm-cache", "paths": ["~/.npm/_cacache"], "rebuildable": true,
+		"clear": [["sh", "-c", "echo ran >> `+log+`"]]}]}`)
+	out, err := run(t, env, "culprit", "clear", "npm-cache", "--yes")
+	if err == nil || !strings.Contains(out+err.Error(), "refusing to run a clear command") {
+		t.Fatalf("ran without a runner: %v %s", err, out)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Fatal("the command ran")
+	}
+}
+
+// --all over present command rows calls the runner with their argv and
+// starts no process: PATH is empty, so a real exec would fail them.
+func TestClearAllCommandRowsUseRunner(t *testing.T) {
+	env := fixture(t)
+	t.Setenv("PATH", t.TempDir())
+	for _, rel := range []string{"go/pkg/mod/cache/x", ".cache/uv/x", "Library/Developer/CoreSimulator/Devices/x"} {
+		p := filepath.Join(env.Home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := run(t, env, "free", "--all", "--yes")
+	if err != nil {
+		t.Fatal(err, out)
+	}
+	var got []string
+	for _, c := range ran(t, env) {
+		got = append(got, strings.Join(c, " "))
+	}
+	slices.Sort(got)
+	want := []string{"go clean -modcache", "uv cache clean", "xcrun simctl delete unavailable"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("runner calls %v, want %v", got, want)
+	}
+	if strings.Contains(out, "executable file not found") {
+		t.Fatalf("a process was started: %s", out)
+	}
+	for _, rel := range []string{"go/pkg/mod/cache/x", ".cache/uv/x", "Library/Developer/CoreSimulator/Devices/x"} {
+		if _, err := os.Stat(filepath.Join(env.Home, rel)); err != nil {
+			t.Errorf("%s: the fake runner removed nothing, yet: %v", rel, err)
+		}
 	}
 }
 

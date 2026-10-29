@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -84,6 +85,11 @@ type Env struct {
 	// ProjectRoots fill {project_root} in culprit paths (the culprits
 	// file's "project_roots").
 	ProjectRoots []string
+	// Run runs one clear command (a row's clear argv) and returns its
+	// combined output. DefaultEnv sets ExecCommand; a test sets a fake
+	// that records the argv and runs nothing. With none set, Clear runs a
+	// command only when Home is the real home directory (CommandRunner).
+	Run func(ctx context.Context, argv []string) ([]byte, error)
 }
 
 // ProjectRootPlaceholder in a culprit path stands for each project root.
@@ -101,7 +107,7 @@ func DefaultEnv() Env {
 		}
 		file = filepath.Join(dir, "o-df", "culprits.json")
 	}
-	return Env{Home: home, UserFile: file}
+	return Env{Home: home, UserFile: file, Run: ExecCommand}
 }
 
 // Load merges the embedded defaults with the user's file (absent is fine)
