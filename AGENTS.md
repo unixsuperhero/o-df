@@ -34,4 +34,4 @@ gofmt -l . && GOWORK=off go vet ./... && GOWORK=off GOFLAGS=-trimpath go test ./
 GOWORK=off go run . tui --smoke
 ```
 
-ochazuke (`v0.48.0`) and oden (`v0.1.1`) are required at their tags; never commit a `go.work` or a `replace`.
+ochazuke (`v0.50.0`) and oden (`v0.1.1`) are required at their tags; never commit a `go.work` or a `replace`.
