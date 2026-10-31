@@ -6,8 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/unixsuperhero/ochazuke"
-	ocli "github.com/unixsuperhero/ochazuke/cli"
+	"ofam.dev/ochazuke"
+	ocli "ofam.dev/ochazuke/cli"
 )
 
 // runTUI opens the culprits page (or, with --smoke, renders one frame).

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/unixsuperhero/ochazuke"
-	ocli "github.com/unixsuperhero/ochazuke/cli"
+	"ofam.dev/ochazuke"
+	ocli "ofam.dev/ochazuke/cli"
 )
 
 // Every test runs against a temp HOME with a fixture of caches; nothing

@@ -1,6 +1,6 @@
 # o-df: agent guide
 
-`o-df` (so `o df`) finds and clears disk hogs. Usage, keys and the culprits file are in README.md. It is an [ochazuke](https://github.com/unixsuperhero/ochazuke) application (ochazuke's `AGENTS.md`, "Building an application on ochazuke", and its Invariants apply unchanged) with [oden](https://github.com/unixsuperhero/oden) dispatch.
+`o-df` (so `o df`) finds and clears disk hogs. Usage, keys and the culprits file are in README.md. It is an [ochazuke](https://github.com/ofamtools/ochazuke) application (ochazuke's `AGENTS.md`, "Building an application on ochazuke", and its Invariants apply unchanged) with [oden](https://github.com/ofamtools/oden) dispatch.
 
 ## Plans and todos
 

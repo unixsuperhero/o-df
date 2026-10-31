@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/unixsuperhero/ochazuke"
-	ocli "github.com/unixsuperhero/ochazuke/cli"
+	"ofam.dev/ochazuke"
+	ocli "ofam.dev/ochazuke/cli"
 )
 
 // The application: one ochazuke runtime holding the culprit list and the

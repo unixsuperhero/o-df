@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/unixsuperhero/oden"
+	"ofam.dev/oden"
 )
 
 // Culprit names resolve the way oden resolves command words: an exact name

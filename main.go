@@ -25,8 +25,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	ocli "github.com/unixsuperhero/ochazuke/cli"
-	"github.com/unixsuperhero/oden"
+	ocli "ofam.dev/ochazuke/cli"
+	"ofam.dev/oden"
 )
 
 func main() {
