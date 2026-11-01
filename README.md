@@ -24,6 +24,7 @@ yours to set (see [Configuring culprits](#configuring-culprits)).
 Install with the Go version in [go.mod](go.mod) or newer:
 
 ```sh
+go install ofam.dev/oden/cmd/o@latest   # oden's o: `o df` runs o-df, no dash needed
 go install ofam.dev/o-df@latest
 mtm extension register df   # optional: the culprits page as an mtm tab
 ```
@@ -31,24 +32,24 @@ mtm extension register df   # optional: the culprits page as an mtm tab
 ## Usage
 
 ```sh
-o-df                      # the same as o-df scan
-o-df scan [--all] [--json] [--timeout 60s] [--external]
-o-df top [PATH] [--depth 2] [--n 30] [--min 100M] [--timeout 5m] [--external] [--json]
-o-df culprit list [--all] [--format table]
-o-df culprit show NAME
-o-df culprit size NAME
-o-df free NAME... [--yes]   # clear culprits; o-df delete is the same command
-o-df free --all [--yes]     # clear every present rebuildable culprit
-o-df culprit clear NAME [--yes]            # culprit free and culprit delete too
-o-df culprit clear --names '["a","b"]' | --all [--yes]
-o-df culprit relocate NAME [--to DIR] [--link] [--same-volume] [--yes]
-o-df tui [--smoke] [--all]  # the culprits page
-o-df catalog              # the nouns, verbs and page for a host
+o df                      # the same as o df scan
+o df scan [--all] [--json] [--timeout 60s] [--external]
+o df top [PATH] [--depth 2] [--n 30] [--min 100M] [--timeout 5m] [--external] [--json]
+o df culprit list [--all] [--format table]
+o df culprit show NAME
+o df culprit size NAME
+o df free NAME... [--yes]   # clear culprits; o df delete is the same command
+o df free --all [--yes]     # clear every present rebuildable culprit
+o df culprit clear NAME [--yes]            # culprit free and culprit delete too
+o df culprit clear --names '["a","b"]' | --all [--yes]
+o df culprit relocate NAME [--to DIR] [--link] [--same-volume] [--yes]
+o df tui [--smoke] [--all]  # the culprits page
+o df catalog              # the nouns, verbs and page for a host
 ```
 
 ## scan
 
-`o-df scan` prints the volume's totals and every culprit with at least one
+`o df scan` prints the volume's totals and every culprit with at least one
 path present, biggest first: name, size, rebuildable, when it was last used
 (the newest access or change time inside it), the advice (delete, relocate
 or keep) and its paths. A path that is a symlink shows as `path → target`
@@ -74,7 +75,7 @@ row and `top`, or pass `--external` to `scan`, `top` or `culprit list`.
 
 ## top
 
-`o-df top PATH` walks PATH once, in parallel, without crossing into another
+`o df top PATH` walks PATH once, in parallel, without crossing into another
 volume or following symlinks, and prints its biggest directories (down to
 `--depth` levels) and files of at least `--min`, biggest first. Use it to
 find what no culprit row covers yet. A PATH on another volume is refused
@@ -82,19 +83,19 @@ without `--external`; after `--timeout` (default 5m) it prints the
 directories it finished, marked partial:
 
 ```sh
-o-df top ~ --depth 2 --min 1G
-o-df top ~/Downloads --depth 1 --min 500M
+o df top ~ --depth 2 --min 1G
+o df top ~/Downloads --depth 1 --min 500M
 ```
 
 ## culprit verbs
 
 `culprit` is a noun with six verbs, the same on the command line, in the
-TUI and from a host (`o-df catalog`). Every one prints JSON
+TUI and from a host (`o df catalog`). Every one prints JSON
 (`--format table|markdown` for the list).
 
 A NAME may be abbreviated, as oden matches command words: an exact name or
-alias wins, else a unique prefix (`o-df free npm` is npm-cache, `o-df
-culprit show go-b` is go-build-cache, `o-df free brew` is homebrew-cache by
+alias wins, else a unique prefix (`o df free npm` is npm-cache, `o df
+culprit show go-b` is go-build-cache, `o df free brew` is homebrew-cache by
 its alias). A prefix of several fails listing them (`"go" is ambiguous:
 go-build-cache, go-mod-cache`), an unknown name lists the closest, and
 clear, free, delete and relocate never act on either; an abbreviated name's
@@ -109,7 +110,7 @@ confirm names the full culprit.
   answers it). It runs the row's `clear` commands, or removes the contents
   of each present path (the directories stay). Read-only trees are made
   writable first. Prints `{name, before, after, freed}`. `free` and `delete`
-  are other names of it (`o-df culprit free NAME`).
+  are other names of it (`o df culprit free NAME`).
 - `clear --names '["a","b"]'` or `clear --all`: several culprits after one
   confirm that lists each with its size and the total. `--all` takes every
   present rebuildable culprit; a culprit that is not rebuildable (Downloads,
@@ -130,13 +131,13 @@ Both changes refuse `/`, the home directory and anything above it.
 
 ## free and delete
 
-`o-df free` (or `o-df delete`, the same command) is `culprit clear` at the
+`o df free` (or `o df delete`, the same command) is `culprit clear` at the
 top level, for several names at once:
 
 ```sh
-o-df free npm-cache pnpm-store   # one confirm for both
-o-df free --all                  # every present rebuildable culprit
-o-df delete --all --yes          # without asking
+o df free npm-cache pnpm-store   # one confirm for both
+o df free --all                  # every present rebuildable culprit
+o df delete --all --yes          # without asking
 ```
 
 ```
@@ -149,7 +150,7 @@ Not rebuildable, never included: downloads 880K. [y/N]
 
 ## The TUI
 
-`o-df tui` opens the culprits page: the list on the left, the focused
+`o df tui` opens the culprits page: the list on the left, the focused
 culprit's detail (every path, its size, the rebuild hint, the clear
 commands) on the right, and a status line with the disk's totals and the
 size of the marked rows.
