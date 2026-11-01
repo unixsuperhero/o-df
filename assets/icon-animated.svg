@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="o-df">
+<title>o-df</title>
+<style>@media (prefers-reduced-motion: no-preference){.odfA-sl{animation:odfA-pop 3.6s cubic-bezier(.45,0,.25,1) infinite}@keyframes odfA-pop{0%{transform:none}10%{transform:translate(5px,-5px)}18%{transform:translate(3px,-3px)}26%,60%{transform:translate(4px,-4px)}72%,100%{transform:none}}}</style>
+<rect width="128" height="128" rx="28" fill="#2a0f18"></rect>
+<g transform="translate(20 20)"><path d="M42 46L78 46A36 36 0 1 1 42 10Z" fill="#f0577f"></path><g class="odfA-sl"><path d="M49 39L49 3A36 36 0 0 1 85 39Z" fill="#ffe8ee" stroke="#ffb3c6" stroke-width="2"></path></g><circle cx="42" cy="46" r="7" fill="#2a0f18"></circle></g>
+</svg>

@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img alt="o-df" src="assets/logo-light.svg" width="360">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-animated-dark.svg">
+    <img alt="o-df" src="assets/logo-animated-light.svg" width="360">
   </picture>
   <br>
   <a href="https://github.com/ofamtools/o-df/tags"><img alt="Latest tag" src="https://img.shields.io/github/v/tag/ofamtools/o-df"></a>
