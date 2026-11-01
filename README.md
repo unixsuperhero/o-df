@@ -1,4 +1,16 @@
-# o-df
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img alt="o-df" src="assets/logo-light.svg" width="360">
+  </picture>
+  <br>
+  <a href="https://github.com/ofamtools/o-df/tags"><img alt="Latest tag" src="https://img.shields.io/github/v/tag/ofamtools/o-df"></a>
+  <a href="https://pkg.go.dev/ofam.dev/o-df"><img alt="Go Reference" src="https://pkg.go.dev/badge/ofam.dev/o-df.svg"></a>
+  <a href="go.mod"><img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/ofamtools/o-df"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/ofamtools/o-df"></a>
+</p>
+
+<p align="center">Finds and clears the usual disk hogs on a Mac: package, browser and build caches, model downloads. Each culprit is a row of data.</p>
 
 `o-df` (so `o df`) finds and clears the usual disk hogs on a Mac: package
 caches, browser caches, build caches, model downloads, the Downloads folder.
@@ -6,6 +18,17 @@ Each culprit is a row of data, not code: o-df ships a default list and reads
 yours from `~/.config/o-df/culprits.json`. The defaults name no volume and no
 folder layout: where `relocate` copies to and where your projects live are
 yours to set (see [Configuring culprits](#configuring-culprits)).
+
+## Install
+
+Install with the Go version in [go.mod](go.mod) or newer:
+
+```sh
+go install ofam.dev/o-df@latest
+mtm extension register df   # optional: the culprits page as an mtm tab
+```
+
+## Usage
 
 ```sh
 o-df                      # the same as o-df scan
@@ -18,8 +41,8 @@ o-df free NAME... [--yes]   # clear culprits; o-df delete is the same command
 o-df free --all [--yes]     # clear every present rebuildable culprit
 o-df culprit clear NAME [--yes]            # culprit free and culprit delete too
 o-df culprit clear --names '["a","b"]' | --all [--yes]
-o-df culprit relocate NAME [--to DIR] [--link] [--yes]
-o-df tui [--smoke]        # the culprits page
+o-df culprit relocate NAME [--to DIR] [--link] [--same-volume] [--yes]
+o-df tui [--smoke] [--all]  # the culprits page
 o-df catalog              # the nouns, verbs and page for a host
 ```
 
@@ -99,7 +122,8 @@ confirm names the full culprit.
   file; with neither it fails and says so, it never guesses), compares the copy
   with the source entry by entry (kind, size, symlink target), deletes the
   source and, with `--link`, leaves a symlink to the copy. It refuses a
-  destination that exists or that is on the source's volume. Prints
+  destination that exists or that is on the source's volume (that frees
+  nothing; `--same-volume` allows it anyway). Prints
   `{name, dir, moved: [{from, to, bytes, linked}], freed}`.
 
 Both changes refuse `/`, the home directory and anything above it.
@@ -173,8 +197,8 @@ drops it. Unknown fields are an error, so a typo does not pass silently.
 }
 ```
 
-Two top-level settings say where things are on your machine. The defaults
-set neither:
+Two top-level settings say where things are on your machine, and a third
+lets the walk reach other volumes. The defaults set none of them:
 
 | Setting | Default | Meaning |
 |---|---|---|
